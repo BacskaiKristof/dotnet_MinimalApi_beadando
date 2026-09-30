@@ -1,41 +1,98 @@
+using Microsoft.EntityFrameworkCore;
+using ShoppingList;
+
 var builder = WebApplication.CreateBuilder(args);
-
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
+builder.Services.AddDbContext<ShoppingListDb>(opt => opt.UseInMemoryDatabase("ShoppingList"));
 builder.Services.AddOpenApi();
-
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
+var shoppingListItems = app.MapGroup("/shoppinglistitems");
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast = Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+shoppingListItems.MapGet("/", GetAllShoppingListItems);
+shoppingListItems.MapGet("/complete", GetCompleteShoppingListItems);
+shoppingListItems.MapGet("/{id}", GetShoppingListItem);
+shoppingListItems.MapPost("/", CreateShoppingListItem);
+shoppingListItems.MapPut("/{id}", UpdateShoppingListItem);
+shoppingListItems.MapPatch("/{id}", PatchShoppingListItem);
+shoppingListItems.MapDelete("/{id}", DeleteShoppingListItem);
 
 app.Run();
 
-internal record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
+static async Task<IResult> GetAllShoppingListItems(ShoppingListDb db)
 {
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
+    return TypedResults.Ok(await db.ShoppingListItems.Select(x => new ShoppingListItemDTO(x)).ToArrayAsync());
+}
+
+static async Task<IResult> GetCompleteShoppingListItems(ShoppingListDb db)
+{
+    return TypedResults.Ok(await db.ShoppingListItems.Where(t => t.IsComplete).Select(x => new ShoppingListItemDTO(x)).ToListAsync());
+}
+
+static async Task<IResult> GetShoppingListItem(int id, ShoppingListDb db)
+{
+    return await db.ShoppingListItems.FindAsync(id)
+        is ShoppingListItem shoppinglistitem
+            ? TypedResults.Ok(new ShoppingListItemDTO(shoppinglistitem))
+            : TypedResults.NotFound();
+}
+
+static async Task<IResult> CreateShoppingListItem(ShoppingListItemDTO shoppingListItemDTO, ShoppingListDb db)
+{
+    var shoppingListItem = new ShoppingListItem
+    {
+        IsComplete = shoppingListItemDTO.IsComplete,
+        Name = shoppingListItemDTO.Name
+    };
+
+    db.ShoppingListItems.Add(shoppingListItem);
+    await db.SaveChangesAsync();
+
+    shoppingListItemDTO = new ShoppingListItemDTO(shoppingListItem);
+
+    return TypedResults.Created($"/shoppinglistitems/{shoppingListItem.Id}", shoppingListItemDTO);
+}
+
+static async Task<IResult> UpdateShoppingListItem(int id, ShoppingListItemDTO shoppingListItemDTO, ShoppingListDb db)
+{
+    var shoppinglistitem = await db.ShoppingListItems.FindAsync(id);
+
+    if (shoppinglistitem is null) return TypedResults.NotFound();
+
+    shoppinglistitem.Name = shoppingListItemDTO.Name;
+    shoppinglistitem.IsComplete = shoppingListItemDTO.IsComplete;
+
+    await db.SaveChangesAsync();
+
+    return TypedResults.NoContent();
+}
+
+static async Task<IResult> PatchShoppingListItem(int id, ShoppingListItemPatchDTO inputShoppingListItem, ShoppingListDb db)
+{
+    var shoppinglistitem = await db.ShoppingListItems.FindAsync(id);
+
+    if (shoppinglistitem is null) return TypedResults.NotFound();
+
+    if (inputShoppingListItem.Name is not null) shoppinglistitem.Name = inputShoppingListItem.Name;
+    if (inputShoppingListItem.IsComplete is not null) shoppinglistitem.IsComplete = inputShoppingListItem.IsComplete.Value;
+
+    await db.SaveChangesAsync();
+
+    return TypedResults.NoContent();
+}
+
+static async Task<IResult> DeleteShoppingListItem(int id, ShoppingListDb db)
+{
+    if (await db.ShoppingListItems.FindAsync(id) is ShoppingListItem shoppinglistitem)
+    {
+        db.ShoppingListItems.Remove(shoppinglistitem);
+        await db.SaveChangesAsync();
+        return TypedResults.NoContent();
+    }
+
+    return TypedResults.NotFound();
 }
